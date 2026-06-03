@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.python-version
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Local editor/OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

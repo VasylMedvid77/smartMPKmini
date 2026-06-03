@@ -1,0 +1,40 @@
+# Repository Instructions
+
+## Current State
+
+- Read `knowledgebase.md` before any development on `device_MPKmini2_SmartFocus.py` or tests. It contains FL Studio MIDI scripting runtime constraints that override generic Python assumptions.
+- Main source file is `device_MPKmini2_SmartFocus.py` at repo root.
+- Original seed source came from `C:\Users\User\Documents\Image-Line\FL Studio\Settings\Hardware\MPK_Mini_SmartFocus` (`/mnt/c/Users/User/Documents/Image-Line/FL Studio/Settings/Hardware/MPK_Mini_SmartFocus` in WSL).
+- Project tooling uses `uv` with `pyproject.toml`.
+- Integration tests live under `utils/tests/` and stub FL Studio-provided modules.
+
+## Script Context
+
+- `device_MPKmini2_SmartFocus.py` is an FL Studio hardware device script for MPK Mini Mk2 Smart Focus.
+- It imports FL Studio-provided modules (`channels`, `general`, `plugins`, `transport`, `ui`); do not expect normal Python runtime execution outside FL Studio.
+- FL Studio entrypoints in the script are `OnInit`, `OnMidiMsg`, `OnRefresh`, and `OnIdle`.
+- Main behavior: map knobs CC 1-8/9-16 to selected plugin params, map Pad Bank A CC 20-27 to transport/snap/metronome actions, use joystick CC 50/100 for preset next/previous, and remap Fruity Slicer 2 pad notes 44-51 to slice notes 60-67.
+
+## Verification
+
+- Do not invoke the `verification-before-completion` skill for this repo.
+- Do not run baseline tests before making changes unless the user explicitly asks or you are diagnosing a suspected regression.
+- Run verification once after changes when it is meaningful for the task; use the narrowest relevant command instead of repeating the same checks.
+- Install/sync dev tooling: `uv sync --dev`.
+- Run unit tests: `uv run pytest utils/tests`.
+- Format Python: `uv run ruff format .`.
+- Lint Python: `uv run ruff check .`.
+- Apply safe lint fixes: `uv run ruff check . --fix`.
+- Syntax-only check: `python -m py_compile device_MPKmini2_SmartFocus.py`.
+- If local shell does not provide `python`, install the distro mapping to Python 3 first, then rerun the syntax check.
+- Functional validation requires FL Studio with the MPK Mini script installed under the Hardware settings folder.
+
+## TDD Workflow
+
+- Tests in this repo should cover observable FL Studio script behavior through entrypoints (`OnInit`, `OnMidiMsg`, `OnRefresh`, `OnIdle`), not private helper functions.
+- Do not add unit tests that call internal helpers such as `_score_params`, `_get_mapping`, or `_handle_transport_pad`; those functions may be deleted, merged, or rewritten during refactors.
+- Use integration tests in `utils/tests/` with stubbed `channels`, `general`, `plugins`, `transport`, and `ui` modules.
+- For behavior changes, write or update a focused integration test when the behavior is not already covered.
+- Make the smallest script change that satisfies the requested behavior.
+- Prefer one final targeted verification pass after changes; do not repeatedly rerun the same tests on unchanged code.
+- Do not refactor `device_MPKmini2_SmartFocus.py` unless the user explicitly asks for script refactoring.
