@@ -60,6 +60,29 @@ class PluginParameters:
 
 KnobMapping = list[MappedParameter | None]
 MappedParametersByName = dict[str, MappedParameter]
+PluginInstanceKey = tuple[int, str]
+
+
+class MappingsCache:
+    def __init__(self, build_knob_mapping) -> None:
+        self._items: dict[PluginInstanceKey, KnobMapping] = {}
+        self.build_knob_mapping = build_knob_mapping
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def put(self, key: PluginInstanceKey, mapping: KnobMapping) -> None:
+        self._items[key] = mapping
+
+    def get(self, key: PluginInstanceKey) -> KnobMapping:
+        mapping = self._items.get(key)
+        if mapping is None:
+            mapping = self.build_knob_mapping(key[0])
+            self.put(key, mapping)
+        return mapping
+
+    def to_print(self) -> str:
+        return "\n".join(str(key) for key in self._items)
 
 
 # ── CC configuration ───────────────────────────────────────────────────────────
@@ -70,6 +93,11 @@ class MidiStatus:
     NOTE_OFF = 0x80
     NOTE_ON = 0x90
     CONTROL_CHANGE = 0xB0
+
+
+class PresetDirection:
+    NEXT = "next"
+    PREVIOUS = "previous"
 
 
 mpk_controls = {
@@ -334,129 +362,44 @@ snap_names = {
 }
 
 
-class MpkHandler:
-    def __init__(self) -> None:
-        self.knob_mappings_by_channel = {}
-        self.last_channel = -99
-        self.joystick_next_armed = True
-        self.joystick_prev_armed = True
-        self.pending_refresh_channel = None
-        self.pending_refresh_ticks = 0
+class MidiHandler:
+    def __init__(self, mappings_cache: MappingsCache) -> None:
+        self.mappings_cache = mappings_cache
+        self.active_plugin_key: PluginInstanceKey | None = None
+        self.joystick_armed_by = {
+            PresetDirection.NEXT: True,
+            PresetDirection.PREVIOUS: True,
+        }
 
-    def handle_init(self) -> None:
-        print("==========================================")
-        print("  MPK Mini Mk2 Smart Focus - loaded")
-        print("  Knobs K1-K8 (CC 1-8): performance params")
-        print("  Joystick Y (CC 100/50): preset next/previous")
-        print("  Pad CC bank (CC 20-27): transport/snap")
-        print("  Fruity Slicer 2 pads: notes 44-51 -> 60-67")
-        print("==========================================")
-
-    def get_mapping(self, channel_index: int) -> KnobMapping:
-        if channel_index not in self.knob_mappings_by_channel:
-            self.knob_mappings_by_channel[channel_index] = self.build_knob_mapping(
-                channel_index
-            )
-        return self.knob_mappings_by_channel[channel_index]
-
-    def invalidate_channel_mapping(self, channel_index: int) -> None:
-        self.knob_mappings_by_channel.pop(channel_index, None)
-
-    def print_mapping(self, channel_index: int) -> None:
-        mapping = self.get_mapping(channel_index)
-        channel_name = FL_CHANNELS.getChannelName(channel_index)
-        plugin_name = FL_PLUGINS.getPluginName(channel_index)
-
-        print("")
-        print(f"  [ Smart Focus -> {channel_name} ({plugin_name}) ]")
-        print("  Knobs:")
-        for knob_index, mapped_parameter in enumerate(mapping):
-            cc = knob_ccs[knob_index]
-            name = "(unmapped)" if mapped_parameter is None else mapped_parameter.name
-            print(f"    K{knob_index + 1} CC{cc}  ->  {name}")
-        print("")
-
-    def handle_refresh(self, flags: int) -> None:
-        selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
-        if selected_channel_index is None or selected_channel_index < 0:
-            return
-
-        if selected_channel_index != self.last_channel:
-            self.last_channel = selected_channel_index
-            self.pending_refresh_channel = selected_channel_index
-            self.pending_refresh_ticks = refresh_delay_ticks
-
-    def handle_idle(self) -> None:
-        if self.pending_refresh_channel is None:
-            return
-
-        if self.pending_refresh_ticks > 0:
-            self.pending_refresh_ticks -= 1
-            return
-
-        channel_index = self.pending_refresh_channel
-        self.pending_refresh_channel = None
-
-        selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
-        if selected_channel_index != channel_index:
-            return
-
-        self.invalidate_channel_mapping(channel_index)
-        self.print_mapping(channel_index)
-
-    def handle_preset_joystick(self, cc: int, value: int) -> bool:
-        selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
-        if selected_channel_index is None or selected_channel_index < 0:
-            return False
-
-        try:
-            if cc == joystick_preset_next_cc:
-                if value < joystick_preset_trigger_value:
-                    self.joystick_next_armed = True
-                    return True
-                if not self.joystick_next_armed:
-                    return True
-                FL_PLUGINS.nextPreset(selected_channel_index)
-                FL_UI.setHintMsg("Preset: Next")
-                self.joystick_next_armed = False
-
-            elif cc == joystick_preset_prev_cc:
-                if value < joystick_preset_trigger_value:
-                    self.joystick_prev_armed = True
-                    return True
-                if not self.joystick_prev_armed:
-                    return True
-                FL_PLUGINS.prevPreset(selected_channel_index)
-                FL_UI.setHintMsg("Preset: Previous")
-                self.joystick_prev_armed = False
-
-            else:
-                return False
-
-            return True
-
-        except Exception as e:
-            print("Preset joystick error:", e)
-            return False
+    def set_active_plugin_key(self, key: PluginInstanceKey | None) -> None:
+        self.active_plugin_key = key
 
     def handle_midi_msg(self, event: FLMidiEvent) -> None:
         match event.status & MidiStatus.MASK:
             case MidiStatus.NOTE_ON | MidiStatus.NOTE_OFF:
-                self.handle_fruity_slicer_2_pad_note(event)
+                self.handle_note_msg(event)
 
             case MidiStatus.CONTROL_CHANGE:
-                self.handle_control_change(event)
+                self.handle_cc_msg(event)
 
             case _:
                 return
 
-    def handle_control_change(self, event: FLMidiEvent) -> None:
+    def handle_note_msg(self, event: FLMidiEvent) -> None:
+        self.handle_fruity_slicer_2_pad_note(event)
+
+    def handle_cc_msg(self, event: FLMidiEvent) -> None:
         cc = event.data1
         value = event.data2
 
         match cc:
-            case cc if cc in (joystick_preset_next_cc, joystick_preset_prev_cc):
-                event.handled = self.handle_preset_joystick(cc, value)
+            case cc if cc == joystick_preset_next_cc:
+                event.handled = True
+                self.handle_preset_joystick(PresetDirection.NEXT, value)
+
+            case cc if cc == joystick_preset_prev_cc:
+                event.handled = True
+                self.handle_preset_joystick(PresetDirection.PREVIOUS, value)
 
             case cc if cc in pad_cc_actions_by_cc:
                 event.handled = self.handle_transport_pad(
@@ -469,18 +412,46 @@ class MpkHandler:
             case _:
                 return
 
+    def handle_preset_joystick(self, direction: str, joystick_value: int) -> None:
+        selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
+        if selected_channel_index is None or selected_channel_index < 0:
+            return
+
+        match direction:
+            case PresetDirection.NEXT:
+                preset_action = FL_PLUGINS.nextPreset
+                hint = "Preset: Next"
+
+            case PresetDirection.PREVIOUS:
+                preset_action = FL_PLUGINS.prevPreset
+                hint = "Preset: Previous"
+
+        if joystick_value < joystick_preset_trigger_value:
+            self.joystick_armed_by[direction] = True
+            return
+
+        if not self.joystick_armed_by[direction]:
+            return
+
+        preset_action(selected_channel_index)
+        FL_UI.setHintMsg(hint)
+        self.joystick_armed_by[direction] = False
+
     def handle_knob_cc(self, cc: int, value: int) -> bool:
         if cc not in all_knob_ccs:
             return False
 
-        selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
-        if selected_channel_index is None or selected_channel_index < 0:
+        selected_rack_instance_idx = FL_CHANNELS.selectedChannel(canBeNone=True)
+        if selected_rack_instance_idx is None or selected_rack_instance_idx < 0:
             return False
 
-        knob_index = knob_ccs.index(cc)
+        knob_idx = knob_ccs.index(cc)
 
-        mapping = self.get_mapping(selected_channel_index)
-        mapped_parameter = mapping[knob_index]
+        if self.active_plugin_key is None:
+            return False
+
+        mapping = self.mappings_cache.get(self.active_plugin_key)
+        mapped_parameter = mapping[knob_idx]
 
         if mapped_parameter is None:
             # Leave event.handled unset so FL Studio's manual MIDI link
@@ -491,12 +462,12 @@ class MpkHandler:
 
         try:
             FL_PLUGINS.setParamValue(
-                scaled_value, mapped_parameter.index, selected_channel_index
+                scaled_value, mapped_parameter.index, selected_rack_instance_idx
             )
-            channel_name = FL_CHANNELS.getChannelName(selected_channel_index)
+            channel_name = FL_CHANNELS.getChannelName(selected_rack_instance_idx)
             pct = round(scaled_value * 100)
             FL_UI.setHintMsg(
-                f"{channel_name}  |  K{knob_index + 1}: {mapped_parameter.name} = {pct}%"
+                f"{channel_name}  |  K{knob_idx + 1}: {mapped_parameter.name} = {pct}%"
             )
         except Exception as e:
             print("Knob mapping error:", e)
@@ -617,6 +588,44 @@ class MpkHandler:
             print("Fruity Slicer 2 pad remap error:", e)
             return False
 
+
+class MpkHandler:
+    def __init__(self) -> None:
+        self.mappings_cache = MappingsCache(self.build_knob_mapping)
+        self.midi_handler = MidiHandler(self.mappings_cache)
+        self.active_mapping_key: PluginInstanceKey | None = None
+        self.last_rack_instance_idx = -99
+
+    def handle_init(self) -> None:
+        self.mappings_cache.clear()
+        for rack_instance_idx in range(FL_CHANNELS.channelCount()):
+            plugin_visible_name = FL_PLUGINS.getPluginName(
+                rack_instance_idx, userName=True
+            )
+            key = (rack_instance_idx, plugin_visible_name)
+            self.mappings_cache.get(key)
+        print(
+            f"MPK Mini Mk2 Smart Focus - loaded\n"
+            f"Mappings cache:\n{self.mappings_cache.to_print()}"
+        )
+
+    def handle_refresh(self, flags: int) -> None:
+        selected_rack_instance_idx = FL_CHANNELS.selectedChannel(canBeNone=True)
+        if selected_rack_instance_idx is None or selected_rack_instance_idx < 0:
+            self.active_mapping_key = None
+            self.midi_handler.set_active_plugin_key(None)
+            return
+
+        plugin_visible_name = FL_PLUGINS.getPluginName(
+            selected_rack_instance_idx, userName=True
+        )
+        self.last_rack_instance_idx = selected_rack_instance_idx
+        self.active_mapping_key = (selected_rack_instance_idx, plugin_visible_name)
+        self.midi_handler.set_active_plugin_key(self.active_mapping_key)
+
+    def handle_midi_msg(self, event: FLMidiEvent) -> None:
+        self.midi_handler.handle_midi_msg(event)
+
     def scan_plugin_parameters(self, channel_index: int) -> PluginParameters:
         """
         Scan plugin parameter names once and keep both lookup shapes needed by
@@ -694,10 +703,14 @@ class MpkHandler:
                 blocked_fallback_slots.add(knob_index)
 
         # Fill remaining None slots via fallback keywords (filtered index only)
-        self.fill_fallback(result, parameters.safe_by_name, used, blocked_fallback_slots)
+        self.fill_fallback(
+            result, parameters.safe_by_name, used, blocked_fallback_slots
+        )
         return result
 
-    def resolve_fallback_map(self, mapped_parameters_by_name: MappedParametersByName) -> KnobMapping:
+    def resolve_fallback_map(
+        self, mapped_parameters_by_name: MappedParametersByName
+    ) -> KnobMapping:
         """
         Build 8-knob list using keyword priority for unknown plugins.
         mapped_parameters_by_name must be pre-filtered (never_map excluded).
@@ -790,4 +803,4 @@ def OnRefresh(flags: int) -> None:
 
 
 def OnIdle() -> None:
-    handler.handle_idle()
+    return

@@ -5,6 +5,8 @@ def test_known_plugin_knob_maps_to_exact_parameter(fl_env):
         11: "Macro 2",
     }
     script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+    script.OnRefresh(0)
 
     event = fl_env.cc(1, 64)
 
@@ -23,6 +25,8 @@ def test_unknown_plugin_knob_uses_keyword_fallback(fl_env):
         2: "Resonance",
     }
     script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+    script.OnRefresh(0)
 
     cutoff_event = fl_env.cc(1, 127)
     resonance_event = fl_env.cc(2, 32)
@@ -52,6 +56,8 @@ def test_unmapped_knob_leaves_event_unhandled(fl_env):
     fl_env.plugins.names[0] = "Mystery Synth"
     fl_env.plugins.params[0] = {0: "Volume"}
     script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+    script.OnRefresh(0)
 
     event = fl_env.cc(1, 100)
 
@@ -66,15 +72,16 @@ def test_knob_mapping_error_is_printed_and_event_handled(fl_env):
     fl_env.plugins.params[0] = {0: "Filter cutoff"}
     fl_env.plugins.fail_set_param = RuntimeError("set failed")
     script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+    script.OnRefresh(0)
 
     event = fl_env.cc(1, 64)
 
     fl_env.run_with_print_capture(script.OnMidiMsg, event)
 
     assert event.handled is True
-    assert len(fl_env.prints) == 1
-    assert fl_env.prints[0][0] == "Knob mapping error:"
-    assert str(fl_env.prints[0][1]) == "set failed"
+    assert fl_env.prints[-1][0] == "Knob mapping error:"
+    assert str(fl_env.prints[-1][1]) == "set failed"
 
 
 def test_transport_pad_ccs_call_fl_transport_and_hints(fl_env):
@@ -169,47 +176,28 @@ def test_non_slicer_notes_are_left_unhandled(fl_env):
     assert fl_env.channels.midi_notes == []
 
 
-def test_refresh_prints_mapping_after_idle_delay(fl_env):
+def test_on_init_builds_mapping_cache_and_prints_keys(fl_env):
     fl_env.plugins.names[0] = "Mystery Synth"
+    fl_env.plugins.user_names[0] = "Mystery Synth"
     fl_env.plugins.params[0] = {
         0: "Cutoff",
         1: "Resonance",
     }
     script = fl_env.load_script()
 
-    fl_env.run_with_print_capture(script.OnRefresh, 0)
-    for _ in range(6):
-        fl_env.run_with_print_capture(script.OnIdle)
+    fl_env.run_with_print_capture(script.OnInit)
 
-    printed_text = "\n".join(
-        " ".join(str(part) for part in line) for line in fl_env.prints
-    )
-    assert "[ Smart Focus -> Test Channel (Mystery Synth) ]" in printed_text
-    assert "K1 CC1  ->  Cutoff" in printed_text
-    assert "K2 CC2  ->  Resonance" in printed_text
-
-
-def test_print_mapping_uses_cached_parameter_names(fl_env):
-    fl_env.plugins.names[0] = "Mystery Synth"
-    fl_env.plugins.params[0] = {
-        0: "Cutoff",
-        1: "Resonance",
-    }
-    script = fl_env.load_script()
-
-    event = fl_env.cc(1, 64)
-    script.OnMidiMsg(event)
-    calls_after_mapping = len(fl_env.plugins.get_param_name_calls)
-
-    fl_env.run_with_print_capture(script.handler.print_mapping, 0)
-
-    assert len(fl_env.plugins.get_param_name_calls) == calls_after_mapping
+    assert fl_env.prints == [
+        ("MPK Mini Mk2 Smart Focus - loaded\nMappings cache:\n(0, 'Mystery Synth')",)
+    ]
 
 
 def test_integer_plugin_targets_reuse_scanned_parameter_names(fl_env):
     fl_env.plugins.names[0] = "FLEX"
     fl_env.plugins.params[0] = {10: "Macro 1"}
     script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+    script.OnRefresh(0)
 
     event = fl_env.cc(1, 64)
     script.OnMidiMsg(event)
@@ -226,5 +214,4 @@ def test_on_init_prints_startup_banner(fl_env):
         " ".join(str(part) for part in line) for line in fl_env.prints
     )
     assert "MPK Mini Mk2 Smart Focus - loaded" in printed_text
-    assert "Knobs K1-K8 (CC 1-8): performance params" in printed_text
-    assert "Pad CC bank (CC 20-27): transport/snap" in printed_text
+    assert "Mappings cache:" in printed_text

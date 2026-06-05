@@ -31,10 +31,12 @@
 
 ## TDD Workflow
 
+- Do not invoke or follow the `test-driven-development` skill in this repo unless the user explicitly asks for TDD. Discuss and settle implementation first; write or update tests after the implementation direction is approved.
 - Tests in this repo should cover observable FL Studio script behavior through entrypoints (`OnInit`, `OnMidiMsg`, `OnRefresh`, `OnIdle`), not private helper functions.
 - Do not add unit tests that call internal helpers such as `_score_params`, `_get_mapping`, or `_handle_transport_pad`; those functions may be deleted, merged, or rewritten during refactors.
 - Use integration tests in `utils/tests/` with stubbed `channels`, `general`, `plugins`, `transport`, and `ui` modules.
 - For behavior changes, write or update a focused integration test when the behavior is not already covered.
 - Make the smallest script change that satisfies the requested behavior.
+- Do not extract a helper/function for logic used only once in one place unless the user explicitly asks or there is a concrete runtime/testing constraint.
 - Prefer one final targeted verification pass after changes; do not repeatedly rerun the same tests on unchanged code.
 - Do not refactor `device_MPKmini2_SmartFocus.py` unless the user explicitly asks for script refactoring.

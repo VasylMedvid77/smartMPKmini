@@ -31,6 +31,11 @@ class FakeChannels:
     def getChannelName(self, chan):
         return self.names.get(chan, f"Channel {chan}")
 
+    def channelCount(self):
+        if not self.names:
+            return 0
+        return max(self.names) + 1
+
     def midiNoteOn(self, chan, note, velocity):
         self.midi_notes.append((chan, note, velocity))
 
@@ -38,6 +43,7 @@ class FakeChannels:
 @dataclass
 class FakePlugins:
     names: dict[int, str] = field(default_factory=lambda: {0: "Test Plugin"})
+    user_names: dict[int, str] = field(default_factory=dict)
     params: dict[int, dict[int, str]] = field(default_factory=dict)
     set_param_calls: list[tuple[float, int, int]] = field(default_factory=list)
     next_preset_calls: list[int] = field(default_factory=list)
@@ -45,7 +51,9 @@ class FakePlugins:
     fail_set_param: Exception | None = None
     get_param_name_calls: list[tuple[int, int]] = field(default_factory=list)
 
-    def getPluginName(self, chan):
+    def getPluginName(self, chan, slotIndex=-1, userName=False, useGlobalIndex=False):
+        if userName:
+            return self.user_names.get(chan, self.names.get(chan, ""))
         return self.names.get(chan, "")
 
     def getParamName(self, index, chan):
