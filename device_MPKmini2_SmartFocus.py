@@ -144,9 +144,11 @@ pad_cc_actions_by_cc = {
 pad_note_bank_notes = [
     control["note"] for control in mpk_controls["pad_note_bank"].values()
 ]
-joystick_preset_next_cc = mpk_controls["joystick"]["preset_next"]["cc"]
-joystick_preset_prev_cc = mpk_controls["joystick"]["preset_previous"]["cc"]
-joystick_preset_trigger_value = mpk_controls["joystick"]["trigger_value"]
+class CC:
+    JOYSTICK_PRESET_NEXT = mpk_controls["joystick"]["preset_next"]["cc"]
+    JOYSTICK_PRESET_PREV = mpk_controls["joystick"]["preset_previous"]["cc"]
+    PRESET_TRIGGER_VALUE = mpk_controls["joystick"]["trigger_value"]
+
 fruity_slicer_2_slice_notes = [60, 61, 62, 63, 64, 65, 66, 67]
 
 max_scan = 4096
@@ -393,11 +395,11 @@ class MidiHandler:
         value = event.data2
 
         match cc:
-            case cc if cc == joystick_preset_next_cc:
+            case CC.JOYSTICK_PRESET_NEXT:
                 event.handled = True
                 self.handle_preset_joystick(PresetDirection.NEXT, value)
 
-            case cc if cc == joystick_preset_prev_cc:
+            case CC.JOYSTICK_PRESET_PREV:
                 event.handled = True
                 self.handle_preset_joystick(PresetDirection.PREVIOUS, value)
 
@@ -426,7 +428,7 @@ class MidiHandler:
                 preset_action = FL_PLUGINS.prevPreset
                 hint = "Preset: Previous"
 
-        if joystick_value < joystick_preset_trigger_value:
+        if joystick_value < CC.PRESET_TRIGGER_VALUE:
             self.joystick_armed_by[direction] = True
             return
 
