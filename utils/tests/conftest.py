@@ -60,6 +60,12 @@ class FakePlugins:
         self.get_param_name_calls.append((index, chan))
         return self.params.get(chan, {}).get(index, "")
 
+    def getParamCount(self, chan):
+        params = self.params.get(chan, {})
+        if not params:
+            return 0
+        return max(params) + 1
+
     def setParamValue(self, value, index, chan):
         if self.fail_set_param is not None:
             raise self.fail_set_param

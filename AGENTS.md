@@ -12,8 +12,17 @@
 
 - `device_MPKmini2_SmartFocus.py` is an FL Studio hardware device script for MPK Mini Mk2 Smart Focus.
 - It imports FL Studio-provided modules (`channels`, `general`, `plugins`, `transport`, `ui`); do not expect normal Python runtime execution outside FL Studio.
+- FL Studio modules are internal host APIs, not external services. Do not treat them like unreliable network or REST dependencies. Guard only documented or observed FL-version compatibility issues narrowly; otherwise let invalid host/script assumptions fail visibly.
+- Before adding any `try`/`except` block, prove it handles a documented, observed, or tested failure mode. Do not add defensive exception handling for imagined failures, invalid assumptions, or tool-satisfying noise.
 - FL Studio entrypoints in the script are `OnInit`, `OnMidiMsg`, `OnRefresh`, and `OnIdle`.
 - Main behavior: map knobs CC 1-8/9-16 to selected plugin params, map Pad Bank A CC 20-27 to transport/snap/metronome actions, use joystick CC 50/100 for preset next/previous, and remap Fruity Slicer 2 pad notes 44-51 to slice notes 60-67.
+
+## Architecture Discipline
+
+- Before proposing architecture, refactor options, or new object boundaries, explicitly check Single Responsibility Principle boundaries. This is not optional or cosmetic: SRP is a fundamental architecture principle that tames complexity, prevents mistakes, and makes future changes easier.
+- For each proposed object, module, or shared state entity, state what single responsibility it owns, why that responsibility belongs there, what state it owns, what it must not know, and which consumers may call it for what purpose.
+- Reject designs that mix storage/cache concerns with runtime business state, orchestration, MIDI event handling, UI feedback, or domain decisions. Convenience bundles are not acceptable when they blur ownership.
+- This repository is intended to be publicly available code that showcases the owner's engineering ability. Tangled architecture, unclear responsibility boundaries, or careless coupling can directly harm that goal.
 
 ## Verification
 

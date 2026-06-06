@@ -14,7 +14,6 @@ def test_known_plugin_knob_maps_to_exact_parameter(fl_env):
 
     assert event.handled is True
     assert fl_env.plugins.set_param_calls == [(64 / 127.0, 10, 0)]
-    assert fl_env.ui.hints == ["Test Channel  |  K1: Macro 1 = 50%"]
 
 
 def test_unknown_plugin_knob_uses_keyword_fallback(fl_env):
@@ -84,7 +83,7 @@ def test_knob_mapping_error_is_printed_and_event_handled(fl_env):
     assert str(fl_env.prints[-1][1]) == "set failed"
 
 
-def test_transport_pad_ccs_call_fl_transport_and_hints(fl_env):
+def test_transport_pad_ccs_call_fl_transport(fl_env):
     script = fl_env.load_script()
 
     play = fl_env.cc(20, 127)
@@ -110,14 +109,6 @@ def test_transport_pad_ccs_call_fl_transport_and_hints(fl_env):
         ("record", ()),
         ("setLoopMode", ()),
         ("globalTransport", (110, 1)),
-    ]
-    assert fl_env.ui.hints == [
-        "Transport: Play",
-        "Transport: Stop",
-        "Transport: Record OFF",
-        "Snap: Cell",
-        "Transport: Pattern/Song toggle",
-        "Metronome: ON",
     ]
 
 
@@ -145,7 +136,6 @@ def test_joystick_preset_controls_are_debounced(fl_env):
     )
     assert fl_env.plugins.next_preset_calls == [0, 0]
     assert fl_env.plugins.prev_preset_calls == [0]
-    assert fl_env.ui.hints == ["Preset: Next", "Preset: Next", "Preset: Previous"]
 
 
 def test_fruity_slicer_2_pads_remap_notes_to_slices(fl_env):
@@ -161,7 +151,6 @@ def test_fruity_slicer_2_pads_remap_notes_to_slices(fl_env):
     assert note_on.handled is True
     assert note_off.handled is True
     assert fl_env.channels.midi_notes == [(0, 60, 96), (0, 60, 0)]
-    assert fl_env.ui.hints == ["Fruity Slicer 2: Pad 1 -> Slice note 60"]
 
 
 def test_non_slicer_notes_are_left_unhandled(fl_env):

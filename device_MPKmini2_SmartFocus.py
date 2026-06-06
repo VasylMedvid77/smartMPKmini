@@ -50,23 +50,14 @@ class MappedParameter:
         self.name = name
 
 
-class PluginParameters:
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.by_name = {}
-        self.safe_by_name = {}
-        self.by_index = {}
-
-
 KnobMapping = list[MappedParameter | None]
-MappedParametersByName = dict[str, MappedParameter]
+ParametersByIndex = dict[ParamIndex, str]
 PluginInstanceKey = tuple[int, str]
 
 
 class MappingsCache:
-    def __init__(self, build_knob_mapping) -> None:
+    def __init__(self) -> None:
         self._items: dict[PluginInstanceKey, KnobMapping] = {}
-        self.build_knob_mapping = build_knob_mapping
 
     def clear(self) -> None:
         self._items.clear()
@@ -74,15 +65,14 @@ class MappingsCache:
     def put(self, key: PluginInstanceKey, mapping: KnobMapping) -> None:
         self._items[key] = mapping
 
-    def get(self, key: PluginInstanceKey) -> KnobMapping:
-        mapping = self._items.get(key)
-        if mapping is None:
-            mapping = self.build_knob_mapping(key[0])
-            self.put(key, mapping)
-        return mapping
+    def get(self, key: PluginInstanceKey) -> KnobMapping | None:
+        return self._items.get(key)
 
     def to_print(self) -> str:
         return "\n".join(str(key) for key in self._items)
+
+
+mappings_cache = MappingsCache()
 
 
 # ── CC configuration ───────────────────────────────────────────────────────────
@@ -144,15 +134,14 @@ pad_cc_actions_by_cc = {
 pad_note_bank_notes = [
     control["note"] for control in mpk_controls["pad_note_bank"].values()
 ]
+
+
 class CC:
     JOYSTICK_PRESET_NEXT = mpk_controls["joystick"]["preset_next"]["cc"]
     JOYSTICK_PRESET_PREV = mpk_controls["joystick"]["preset_previous"]["cc"]
     PRESET_TRIGGER_VALUE = mpk_controls["joystick"]["trigger_value"]
 
 fruity_slicer_2_slice_notes = [60, 61, 62, 63, 64, 65, 66, 67]
-
-max_scan = 4096
-debug_mapping = False
 
 # ── Plugin-specific mappings (exact param name strings, case-insensitive) ──────
 #
@@ -344,8 +333,6 @@ fallback_priority = [
 
 # ── State ──────────────────────────────────────────────────────────────────────
 
-refresh_delay_ticks = 5
-
 snap_names = {
     0: "Line",
     1: "Cell",
@@ -365,8 +352,7 @@ snap_names = {
 
 
 class MidiHandler:
-    def __init__(self, mappings_cache: MappingsCache) -> None:
-        self.mappings_cache = mappings_cache
+    def __init__(self) -> None:
         self.active_plugin_key: PluginInstanceKey | None = None
         self.joystick_armed_by = {
             PresetDirection.NEXT: True,
@@ -422,11 +408,9 @@ class MidiHandler:
         match direction:
             case PresetDirection.NEXT:
                 preset_action = FL_PLUGINS.nextPreset
-                hint = "Preset: Next"
 
             case PresetDirection.PREVIOUS:
                 preset_action = FL_PLUGINS.prevPreset
-                hint = "Preset: Previous"
 
         if joystick_value < CC.PRESET_TRIGGER_VALUE:
             self.joystick_armed_by[direction] = True
@@ -436,7 +420,6 @@ class MidiHandler:
             return
 
         preset_action(selected_channel_index)
-        FL_UI.setHintMsg(hint)
         self.joystick_armed_by[direction] = False
 
     def handle_knob_cc(self, cc: int, value: int) -> bool:
@@ -452,7 +435,9 @@ class MidiHandler:
         if self.active_plugin_key is None:
             return False
 
-        mapping = self.mappings_cache.get(self.active_plugin_key)
+        mapping = mappings_cache.get(self.active_plugin_key)
+        if mapping is None:
+            return False
         mapped_parameter = mapping[knob_idx]
 
         if mapped_parameter is None:
@@ -465,11 +450,6 @@ class MidiHandler:
         try:
             FL_PLUGINS.setParamValue(
                 scaled_value, mapped_parameter.index, selected_rack_instance_idx
-            )
-            channel_name = FL_CHANNELS.getChannelName(selected_rack_instance_idx)
-            pct = round(scaled_value * 100)
-            FL_UI.setHintMsg(
-                f"{channel_name}  |  K{knob_idx + 1}: {mapped_parameter.name} = {pct}%"
             )
         except Exception as e:
             print("Knob mapping error:", e)
@@ -496,50 +476,29 @@ class MidiHandler:
             if action == "play_pause":
                 if is_on:
                     FL_TRANSPORT.start()
-                    FL_UI.setHintMsg("Transport: Play")
                 else:
                     self.global_transport(10, 1)  # Play/Pause command
-                    FL_UI.setHintMsg("Transport: Pause")
 
             elif action == "stop":
                 if is_on:
                     FL_TRANSPORT.stop()
-                    FL_UI.setHintMsg("Transport: Stop")
 
             elif action == "record":
                 FL_TRANSPORT.record()
-                if is_on:
-                    FL_UI.setHintMsg("Transport: Record ON")
-                else:
-                    FL_UI.setHintMsg("Transport: Record OFF")
 
             elif action == "snap_next":
                 if is_on:
                     FL_UI.snapMode(1)
-                    try:
-                        snap_name = snap_names.get(
-                            FL_UI.getSnapMode(),
-                            f"mode {FL_UI.getSnapMode()}",
-                        )
-                    except Exception:
-                        snap_name = "changed"
-                    FL_UI.setHintMsg(f"Snap: {snap_name}")
 
             elif action == "songpat":
                 if is_on:
                     FL_TRANSPORT.setLoopMode()
-                    FL_UI.setHintMsg("Transport: Pattern/Song toggle")
 
             elif action == "metronome":
                 current_on = FL_GENERAL.getUseMetronome() != 0
 
                 if current_on != is_on:
                     self.global_transport(110, 1)
-
-                if is_on:
-                    FL_UI.setHintMsg("Metronome: ON")
-                else:
-                    FL_UI.setHintMsg("Metronome: OFF")
 
             return True
 
@@ -556,10 +515,7 @@ class MidiHandler:
         if selected_channel_index is None or selected_channel_index < 0:
             return False
 
-        try:
-            plugin_name = FL_PLUGINS.getPluginName(selected_channel_index).lower()
-        except Exception:
-            plugin_name = ""
+        plugin_name = FL_PLUGINS.getPluginName(selected_channel_index).lower()
 
         if "fruity slicer 2" not in plugin_name:
             return False
@@ -577,9 +533,6 @@ class MidiHandler:
         try:
             if status == 0x90 and velocity > 0:
                 FL_CHANNELS.midiNoteOn(selected_channel_index, mapped_note, velocity)
-                FL_UI.setHintMsg(
-                    f"Fruity Slicer 2: Pad {pad_index + 1} -> Slice note {mapped_note}"
-                )
             else:
                 FL_CHANNELS.midiNoteOn(selected_channel_index, mapped_note, 0)
 
@@ -593,28 +546,25 @@ class MidiHandler:
 
 class MpkHandler:
     def __init__(self) -> None:
-        self.mappings_cache = MappingsCache(self.build_knob_mapping)
-        self.midi_handler = MidiHandler(self.mappings_cache)
-        self.active_mapping_key: PluginInstanceKey | None = None
+        self.midi_handler = MidiHandler()
         self.last_rack_instance_idx = -99
 
     def handle_init(self) -> None:
-        self.mappings_cache.clear()
+        mappings_cache.clear()
         for rack_instance_idx in range(FL_CHANNELS.channelCount()):
             plugin_visible_name = FL_PLUGINS.getPluginName(
                 rack_instance_idx, userName=True
             )
             key = (rack_instance_idx, plugin_visible_name)
-            self.mappings_cache.get(key)
+            mappings_cache.put(key, self.build_knob_mapping(rack_instance_idx))
         print(
             f"MPK Mini Mk2 Smart Focus - loaded\n"
-            f"Mappings cache:\n{self.mappings_cache.to_print()}"
+            f"Mappings cache:\n{mappings_cache.to_print()}"
         )
 
     def handle_refresh(self, flags: int) -> None:
         selected_rack_instance_idx = FL_CHANNELS.selectedChannel(canBeNone=True)
         if selected_rack_instance_idx is None or selected_rack_instance_idx < 0:
-            self.active_mapping_key = None
             self.midi_handler.set_active_plugin_key(None)
             return
 
@@ -622,115 +572,100 @@ class MpkHandler:
             selected_rack_instance_idx, userName=True
         )
         self.last_rack_instance_idx = selected_rack_instance_idx
-        self.active_mapping_key = (selected_rack_instance_idx, plugin_visible_name)
-        self.midi_handler.set_active_plugin_key(self.active_mapping_key)
+        active_plugin_key = (selected_rack_instance_idx, plugin_visible_name)
+        if mappings_cache.get(active_plugin_key) is None:
+            mappings_cache.put(
+                active_plugin_key,
+                self.build_knob_mapping(selected_rack_instance_idx),
+            )
+        self.midi_handler.set_active_plugin_key(active_plugin_key)
 
     def handle_midi_msg(self, event: FLMidiEvent) -> None:
         self.midi_handler.handle_midi_msg(event)
 
-    def scan_plugin_parameters(self, channel_index: int) -> PluginParameters:
+    def scan_plugin_parameters(self, channel_index: int) -> ParametersByIndex:
         """
-        Scan plugin parameter names once and keep both lookup shapes needed by
-        exact plugin maps and fallback keyword matching.
+        Scan plugin parameter names once by FL parameter index.
         """
-        try:
-            plugin_name = FL_PLUGINS.getPluginName(channel_index).lower()
-        except Exception:
-            plugin_name = ""
 
-        parameters = PluginParameters(plugin_name)
+        param_count = FL_PLUGINS.getParamCount(channel_index)
+        # VST wrappers may report 4240 slots; first 4096 are plugin params.
+        empty_streak_limit = 64
+        scan_limit = min(param_count, 4096)
+
+        parameters_by_index = {}
         empty_streak = 0
-        for parameter_index in range(max_scan):
-            try:
-                name = FL_PLUGINS.getParamName(parameter_index, channel_index)
-            except Exception:
-                break
-            if name and name.strip():
-                name_lower = name.lower()
-                mapped_parameter = MappedParameter(parameter_index, name)
-                parameters.by_index[parameter_index] = mapped_parameter
-                if name_lower not in parameters.by_name:
-                    parameters.by_name[name_lower] = mapped_parameter
-                if not any(keyword in name_lower for keyword in never_map):
-                    parameters.safe_by_name[name_lower] = mapped_parameter
+        for parameter_index in range(scan_limit):
+            name = FL_PLUGINS.getParamName(parameter_index, channel_index)
+            if name.strip():
+                parameters_by_index[parameter_index] = name.lower()
                 empty_streak = 0
             else:
                 empty_streak += 1
-                if empty_streak >= 64:
+                if empty_streak >= empty_streak_limit:
                     break
-        return parameters
+        return parameters_by_index
 
     def resolve_plugin_map(
         self,
-        channel_index: int,
-        parameters: PluginParameters,
+        parameters_by_index: ParametersByIndex,
         plugin_key: str,
     ) -> KnobMapping:
         """
         Build knob list using exact name matching from plugin_maps.
-        Uses unfiltered params for explicit user choices, then safe params
-        (never_map excluded) for per-knob fallback.
         Returns [...8...].
         """
-        spec = plugin_maps[plugin_key]
         used = set()
         blocked_fallback_slots = set()
         result = [None] * 8
 
-        for knob_index, target_name in enumerate(spec):
-            if target_name is None:
+        for knob_index, target in enumerate(plugin_maps[plugin_key]):
+            if target is None:
                 continue
-            if isinstance(target_name, int):
-                mapped_parameter = parameters.by_index.get(target_name)
-                if mapped_parameter is None:
-                    mapped_parameter = MappedParameter(
-                        target_name,
-                        FL_PLUGINS.getParamName(target_name, channel_index),
-                    )
-            else:
-                mapped_parameter = parameters.by_name.get(target_name.lower())
-            if debug_mapping:
-                print(
-                    "DEBUG map",
-                    plugin_key,
-                    knob_index + 1,
-                    repr(target_name),
-                    "->",
-                    None if mapped_parameter is None else mapped_parameter.index,
-                )
-            if mapped_parameter is not None:
-                result[knob_index] = mapped_parameter
-                used.add(mapped_parameter.index)
-            else:
-                blocked_fallback_slots.add(knob_index)
 
-        # Fill remaining None slots via fallback keywords (filtered index only)
+            mapped_parameter = None
+            if isinstance(target, int):
+                name = parameters_by_index.get(target)
+                if name is not None:
+                    mapped_parameter = MappedParameter(target, name)
+            else:
+                target = target.lower()
+                for parameter_index, name in parameters_by_index.items():
+                    if name == target:
+                        mapped_parameter = MappedParameter(parameter_index, name)
+                        break
+
+            if mapped_parameter is None:
+                blocked_fallback_slots.add(knob_index)
+                continue
+
+            result[knob_index] = mapped_parameter
+            used.add(mapped_parameter.index)
+
         self.fill_fallback(
-            result, parameters.safe_by_name, used, blocked_fallback_slots
+            result, parameters_by_index, used, blocked_fallback_slots
         )
         return result
 
     def resolve_fallback_map(
-        self, mapped_parameters_by_name: MappedParametersByName
+        self, parameters_by_index: ParametersByIndex
     ) -> KnobMapping:
         """
         Build 8-knob list using keyword priority for unknown plugins.
-        mapped_parameters_by_name must be pre-filtered (never_map excluded).
         """
         used = set()
         result = [None] * 8
-        self.fill_fallback(result, mapped_parameters_by_name, used)
+        self.fill_fallback(result, parameters_by_index, used)
         return result
 
     def fill_fallback(
         self,
         result: KnobMapping,
-        mapped_parameters_by_name: MappedParametersByName,
+        parameters_by_index: ParametersByIndex,
         used: set[ParamIndex],
         blocked_slots: set[int] | None = None,
     ) -> None:
-        """Apply fallback_priority to any still-None slots.
-        Assumes mapped_parameters_by_name has already been filtered against never_map."""
+        """Apply fallback_priority to any still-None slots."""
         if blocked_slots is None:
             blocked_slots = set()
 
@@ -739,51 +674,30 @@ class MpkHandler:
                 continue
             if result[knob_index] is not None:
                 continue
-            for name_lower, mapped_parameter in mapped_parameters_by_name.items():
-                if mapped_parameter.index in used:
+            for parameter_index, name in parameters_by_index.items():
+                if parameter_index in used:
                     continue
-                if any(keyword in name_lower for keyword in keywords):
-                    result[knob_index] = mapped_parameter
-                    used.add(mapped_parameter.index)
+                if any(keyword in name for keyword in never_map):
+                    continue
+                if any(keyword in name for keyword in keywords):
+                    result[knob_index] = MappedParameter(parameter_index, name)
+                    used.add(parameter_index)
                     break
 
     def build_knob_mapping(self, channel_index: int) -> KnobMapping:
-        parameters = self.scan_plugin_parameters(channel_index)
+        plugin_name = FL_PLUGINS.getPluginName(channel_index).lower()
+        parameters_by_index = self.scan_plugin_parameters(channel_index)
 
         matched_key = None
         for key in plugin_maps:
-            if key in parameters.name:
+            if key in plugin_name:
                 matched_key = key
                 break
 
         if matched_key:
-            if debug_mapping:
-                print(
-                    "DEBUG plugin",
-                    parameters.name,
-                    "channel index",
-                    channel_index,
-                    "param count",
-                    len(parameters.by_name),
-                )
-                if matched_key == "flex":
-                    for name_lower, mapped_parameter in parameters.by_name.items():
-                        if (
-                            "gated" in name_lower
-                            or "character" in name_lower
-                            or "filter envelope attack" in name_lower
-                            or "reverb" in name_lower
-                            or "delay" in name_lower
-                        ):
-                            print(
-                                "DEBUG flex param",
-                                mapped_parameter.index,
-                                repr(name_lower),
-                            )
-            return self.resolve_plugin_map(channel_index, parameters, matched_key)
+            return self.resolve_plugin_map(parameters_by_index, matched_key)
         else:
-            # Unknown plugin — fallback only sees safe params
-            return self.resolve_fallback_map(parameters.safe_by_name)
+            return self.resolve_fallback_map(parameters_by_index)
 
 
 # ── FL Studio callbacks ────────────────────────────────────────────────────────
