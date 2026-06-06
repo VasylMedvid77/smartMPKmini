@@ -141,6 +141,7 @@ class CC:
     JOYSTICK_PRESET_PREV = mpk_controls["joystick"]["preset_previous"]["cc"]
     PRESET_TRIGGER_VALUE = mpk_controls["joystick"]["trigger_value"]
 
+
 fruity_slicer_2_slice_notes = [60, 61, 62, 63, 64, 65, 66, 67]
 
 # ── Plugin-specific mappings (exact param name strings, case-insensitive) ──────
@@ -472,39 +473,35 @@ class MidiHandler:
         """
         is_on = value > 0
 
-        try:
-            if action == "play_pause":
+        match action:
+            case "play_pause":
                 if is_on:
                     FL_TRANSPORT.start()
                 else:
                     self.global_transport(10, 1)  # Play/Pause command
 
-            elif action == "stop":
+            case "stop":
                 if is_on:
                     FL_TRANSPORT.stop()
 
-            elif action == "record":
+            case "record":
                 FL_TRANSPORT.record()
 
-            elif action == "snap_next":
+            case "snap_next":
                 if is_on:
                     FL_UI.snapMode(1)
 
-            elif action == "songpat":
+            case "songpat":
                 if is_on:
                     FL_TRANSPORT.setLoopMode()
 
-            elif action == "metronome":
+            case "metronome":
                 current_on = FL_GENERAL.getUseMetronome() != 0
 
                 if current_on != is_on:
                     self.global_transport(110, 1)
 
-            return True
-
-        except Exception as e:
-            print("Transport pad error:", e)
-            return False
+        return True
 
     def handle_fruity_slicer_2_pad_note(self, event: FLMidiEvent) -> bool:
         """
@@ -642,9 +639,7 @@ class MpkHandler:
             result[knob_index] = mapped_parameter
             used.add(mapped_parameter.index)
 
-        self.fill_fallback(
-            result, parameters_by_index, used, blocked_fallback_slots
-        )
+        self.fill_fallback(result, parameters_by_index, used, blocked_fallback_slots)
         return result
 
     def resolve_fallback_map(
