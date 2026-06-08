@@ -42,6 +42,14 @@ class FLMidiEvent:
 
 
 ParamIndex = int
+ControlName = str
+PluginName = str
+PluginControlTarget = str | int
+ControlInput = dict[str, int | None]
+PluginControlMapping = dict[ControlName, PluginControlTarget]
+SmartGuessMapping = dict[ControlName, list[str]]
+ActionMapping = dict[ControlName, str | dict[str, int | str]]
+NoteMapping = dict[PluginName, dict[ControlName, int]]
 
 
 class MappedParameter:
@@ -50,22 +58,22 @@ class MappedParameter:
         self.name = name
 
 
-KnobMapping = list[MappedParameter | None]
-ParametersByIndex = dict[ParamIndex, str]
+MidiControlMapping = dict[int, MappedParameter]
+PluginRuntimeParameters = dict[PluginControlTarget, MappedParameter]
 PluginInstanceKey = tuple[int, str]
 
 
 class MappingsCache:
     def __init__(self) -> None:
-        self._items: dict[PluginInstanceKey, KnobMapping] = {}
+        self._items: dict[PluginInstanceKey, MidiControlMapping] = {}
 
     def clear(self) -> None:
         self._items.clear()
 
-    def put(self, key: PluginInstanceKey, mapping: KnobMapping) -> None:
+    def put(self, key: PluginInstanceKey, mapping: MidiControlMapping) -> None:
         self._items[key] = mapping
 
-    def get(self, key: PluginInstanceKey) -> KnobMapping | None:
+    def get(self, key: PluginInstanceKey) -> MidiControlMapping | None:
         return self._items.get(key)
 
     def to_print(self) -> str:
@@ -75,7 +83,7 @@ class MappingsCache:
 mappings_cache = MappingsCache()
 
 
-# ── CC configuration ───────────────────────────────────────────────────────────
+# ── Mapping configuration ─────────────────────────────────────────────────────
 
 
 class MidiStatus:
@@ -85,182 +93,239 @@ class MidiStatus:
     CONTROL_CHANGE = 0xB0
 
 
-class PresetDirection:
-    NEXT = "next"
-    PREVIOUS = "previous"
-
-
-mpk_controls = {
-    "knobs": {
-        "K1": {"cc": 1},
-        "K2": {"cc": 2},
-        "K3": {"cc": 3},
-        "K4": {"cc": 4},
-        "K5": {"cc": 5},
-        "K6": {"cc": 6},
-        "K7": {"cc": 7},
-        "K8": {"cc": 8},
-    },
-    "pad_cc_bank": {
-        "P1": {"cc": 20, "action": "play_pause"},
-        "P2": {"cc": 21, "action": "stop"},
-        "P3": {"cc": 22, "action": "record"},
-        "P4": {"cc": 23, "action": "snap_next"},
-        "P5": {"cc": 24, "action": "songpat"},
-        "P8": {"cc": 27, "action": "metronome"},
-    },
-    "pad_note_bank": {
-        "P1": {"note": 44},
-        "P2": {"note": 45},
-        "P3": {"note": 46},
-        "P4": {"note": 47},
-        "P5": {"note": 48},
-        "P6": {"note": 49},
-        "P7": {"note": 50},
-        "P8": {"note": 51},
-    },
-    "joystick": {
-        "preset_next": {"cc": 50},
-        "preset_previous": {"cc": 100},
-        "trigger_value": 64,
-    },
+DEFAULT_CONTROLS: dict[ControlName, ControlInput] = {
+    "k1": {"cc": 1, "note": None},
+    "k2": {"cc": 2, "note": None},
+    "k3": {"cc": 3, "note": None},
+    "k4": {"cc": 4, "note": None},
+    "k5": {"cc": 5, "note": None},
+    "k6": {"cc": 6, "note": None},
+    "k7": {"cc": 7, "note": None},
+    "k8": {"cc": 8, "note": None},
+    "pad1": {"cc": 20, "note": 44},
+    "pad2": {"cc": 21, "note": 45},
+    "pad3": {"cc": 22, "note": 46},
+    "pad4": {"cc": 23, "note": 47},
+    "pad5": {"cc": 24, "note": 48},
+    "pad6": {"cc": None, "note": 49},
+    "pad7": {"cc": None, "note": 50},
+    "pad8": {"cc": 27, "note": 51},
+    "joystick_next": {"cc": 50, "note": None},
+    "joystick_previous": {"cc": 100, "note": None},
 }
 
-knob_ccs = [control["cc"] for control in mpk_controls["knobs"].values()]
-all_knob_ccs = set(knob_ccs)
-pad_cc_actions_by_cc = {
-    control["cc"]: control["action"] for control in mpk_controls["pad_cc_bank"].values()
-}
-pad_note_bank_notes = [
-    control["note"] for control in mpk_controls["pad_note_bank"].values()
-]
 
+class MappingConfig:
+    def __init__(self, controls: dict[ControlName, ControlInput] | None = None) -> None:
+        self.controls: dict[ControlName, ControlInput] = {}
+        self.plugin_mappings: dict[PluginName, PluginControlMapping] = {}
+        self.smart_guess_mappings: SmartGuessMapping = {}
+        self.action_mappings: ActionMapping = {}
+        self.note_mappings: NoteMapping = {}
 
-class CC:
-    JOYSTICK_PRESET_NEXT = mpk_controls["joystick"]["preset_next"]["cc"]
-    JOYSTICK_PRESET_PREV = mpk_controls["joystick"]["preset_previous"]["cc"]
-    PRESET_TRIGGER_VALUE = mpk_controls["joystick"]["trigger_value"]
+        self.add_controls(DEFAULT_CONTROLS if controls is None else controls)
 
+    def add_controls(self, controls: dict[ControlName, ControlInput]) -> None:
+        controls_by_cc = {}
+        for raw_control_name, raw_control_input in controls.items():
+            control_name = raw_control_name.strip().lower()
+            cc = raw_control_input.get("cc")
+            note = raw_control_input.get("note")
 
-fruity_slicer_2_slice_notes = [60, 61, 62, 63, 64, 65, 66, 67]
+            if control_name in self.controls:
+                print("Duplicate control:", control_name)
+                continue
+            if cc is None and note is None:
+                print("Control must define cc or note:", control_name)
+                continue
+            if cc is not None and cc in controls_by_cc:
+                print("Duplicate CC:", cc, control_name)
+                continue
 
-# ── Plugin-specific mappings (exact param name strings, case-insensitive) ──────
-#
-# Each entry maps 8 knobs to strings, parameter indexes, or None.
-# Strings are matched against FL_PLUGINS.getParamName() with case-insensitive equality.
-# Integer indexes are used directly for stable controls like FLEX macros.
-# None = leave knob unassigned (falls through to keyword scoring).
-#
-# Key = lowercase substring of FL_PLUGINS.getPluginName() output.
+            self.controls[control_name] = {"cc": cc, "note": note}
+            if cc is not None:
+                controls_by_cc[cc] = control_name
 
-plugin_maps = {
-    "kepler": [
-        "VCF Frequency",
-        "VCF Reso",
-        "VCF Env",
-        "VCF LFO",
-        "LFO rate",
-        "DCO PWM",
-        "HPF Frequency",
-        "DCO LFO",
-    ],
-    "flex": [
-        10,  # macro 1
-        11,  # macro 2
-        12,  # macro 3: preset-dependent label, e.g. Gated/Unison
-        13,  # macro 4
-        14,  # macro 5
-        15,  # macro 6
-        "Volume envelope attack",
-        "Volume envelope release",
-    ],
-    "sawer": [
-        "Filter cutoff",
-        "Filter resolution",
-        "EGF amount",
-        "Reverb mix",
-        "Chorus depth",
-        "LFO speed",
-        "LFO amount",
-        "Noise level",
-    ],
-    "mini synth": [
-        "FLT Freq",
-        "FLT Peak",
-        "EGF Amnt",
-        "LFO Rate",
-        "LFO Amnt",
-        "DIST",
-        "Overdrive",
-        "Decimator",
-    ],
-    "3x osc": [
-        "Filter frequency (modulation X)",
-        "Filter bandwidth (modulation Y)",
-        "Stereo phase randomness",
-        "Osc 2 mix level",
-        "Osc 3 mix level",
-        "Osc 1 coarse pitch",
-        "Osc 2 coarse pitch",
-        "Osc 3 coarse pitch",
-    ],
-    "granulizer": [
-        "Filter frequency (modulation X)",
-        "Filter bandwidth (modulation Y)",
-        "Grain attack time",
-        "Grain hold time",
-        "Grain spacing",
-        "Wave spacing",
-        "Sample start",
-        "Effect depth",
-    ],
-    "fpc": [
-        "Pad 1 volume",
-        "Pad 2 volume",
-        "Pad 3 volume",
-        "Pad 4 volume",
-        "Pad 5 volume",
-        "Pad 6 volume",
-        "Pad 7 volume",
-        "Pad 8 volume",
-    ],
-    "fruity slicer 2": [
-        "Cutoff",
-        "Res",
-        "Transpose",
-        "Detune",
-        None,
-        None,
-        None,
-        None,
-    ],
-}
+    def add_plugin_mapping(
+        self,
+        plugin_name: str,
+        control_mapping: PluginControlMapping,
+    ) -> None:
+        normalized_mapping = {}
+        for raw_control_name, raw_target in control_mapping.items():
+            control_name = raw_control_name.strip().lower()
 
-# ── Fallback keyword priority map (for unknown plugins) ────────────────────────
-#
-# Used when no plugin name matches plugin_maps.
-# Format: (knob_index, [keywords...]) — case-insensitive substring match.
-# First keyword hit wins. Slots already filled are skipped.
+            if control_name not in self.controls:
+                print("Unknown plugin mapping control:", control_name)
+                continue
 
-never_map = [
-    "volume",
-    "master vol",
-    "output vol",
-    "pan",
-    "panorama",
-    "panning",
-    "master pan",
-    "limiter",
-]
+            if isinstance(raw_target, str):
+                target = raw_target.strip().lower()
+            else:
+                target = raw_target
 
-fallback_priority = [
-    (0, ["macro 1", "macro1", "x1 ", "mod x", "filter frequency (modulation x)"]),
-    (1, ["macro 2", "macro2", "x2 ", "mod y", "filter bandwidth (modulation y)"]),
-    (2, ["macro 3", "macro3", "x3 "]),
-    (3, ["macro 4", "macro4", "x4 "]),
-    (
-        0,
-        [
+            normalized_mapping[control_name] = target
+
+        self.plugin_mappings[plugin_name.strip().lower()] = normalized_mapping
+
+    def add_smart_guess_mapping(self, control_mapping: SmartGuessMapping) -> None:
+        for raw_control_name, raw_keywords in control_mapping.items():
+            control_name = raw_control_name.strip().lower()
+
+            if control_name not in self.controls:
+                print("Unknown smart guess control:", control_name)
+                continue
+
+            self.smart_guess_mappings[control_name] = [
+                keyword.strip().lower() for keyword in raw_keywords
+            ]
+
+    def add_action_mapping(self, control_mapping: ActionMapping) -> None:
+        for raw_control_name, raw_action in control_mapping.items():
+            control_name = raw_control_name.strip().lower()
+
+            if control_name not in self.controls:
+                print("Unknown action control:", control_name)
+                continue
+
+            if isinstance(raw_action, str):
+                self.action_mappings[control_name] = raw_action.strip().lower()
+            else:
+                self.action_mappings[control_name] = {
+                    key.strip().lower(): value.strip().lower()
+                    if isinstance(value, str)
+                    else value
+                    for key, value in raw_action.items()
+                }
+
+    def add_note_mapping(
+        self,
+        plugin_name: str,
+        control_mapping: dict[ControlName, int],
+    ) -> None:
+        normalized_mapping = {}
+        for raw_control_name, output_note in control_mapping.items():
+            control_name = raw_control_name.strip().lower()
+
+            if control_name not in self.controls:
+                print("Unknown note mapping control:", control_name)
+                continue
+
+            normalized_mapping[control_name] = output_note
+
+        self.note_mappings[plugin_name.strip().lower()] = normalized_mapping
+
+mapping_config = MappingConfig()
+
+mapping_config.add_plugin_mapping(
+    "kepler",
+    {
+        "k1": "VCF Frequency",
+        "k2": "VCF Reso",
+        "k3": "VCF Env",
+        "k4": "VCF LFO",
+        "k5": "LFO rate",
+        "k6": "DCO PWM",
+        "k7": "HPF Frequency",
+        "k8": "DCO LFO",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "flex",
+    {
+        "k1": 10,  # macro 1
+        "k2": 11,  # macro 2
+        "k3": 12,  # macro 3: preset-dependent label, e.g. Gated/Unison
+        "k4": 13,
+        "k5": 14,
+        "k6": 15,
+        "k7": "Volume envelope attack",
+        "k8": "Volume envelope release",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "sawer",
+    {
+        "k1": "Filter cutoff",
+        "k2": "Filter resolution",
+        "k3": "EGF amount",
+        "k4": "Reverb mix",
+        "k5": "Chorus depth",
+        "k6": "LFO speed",
+        "k7": "LFO amount",
+        "k8": "Noise level",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "mini synth",
+    {
+        "k1": "FLT Freq",
+        "k2": "FLT Peak",
+        "k3": "EGF Amnt",
+        "k4": "LFO Rate",
+        "k5": "LFO Amnt",
+        "k6": "DIST",
+        "k7": "Overdrive",
+        "k8": "Decimator",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "3x osc",
+    {
+        "k1": "Filter frequency (modulation X)",
+        "k2": "Filter bandwidth (modulation Y)",
+        "k3": "Stereo phase randomness",
+        "k4": "Osc 2 mix level",
+        "k5": "Osc 3 mix level",
+        "k6": "Osc 1 coarse pitch",
+        "k7": "Osc 2 coarse pitch",
+        "k8": "Osc 3 coarse pitch",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "granulizer",
+    {
+        "k1": "Filter frequency (modulation X)",
+        "k2": "Filter bandwidth (modulation Y)",
+        "k3": "Grain attack time",
+        "k4": "Grain hold time",
+        "k5": "Grain spacing",
+        "k6": "Wave spacing",
+        "k7": "Sample start",
+        "k8": "Effect depth",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "fpc",
+    {
+        "k1": "Pad 1 volume",
+        "k2": "Pad 2 volume",
+        "k3": "Pad 3 volume",
+        "k4": "Pad 4 volume",
+        "k5": "Pad 5 volume",
+        "k6": "Pad 6 volume",
+        "k7": "Pad 7 volume",
+        "k8": "Pad 8 volume",
+    },
+)
+mapping_config.add_plugin_mapping(
+    "fruity slicer 2",
+    {
+        "k1": "Cutoff",
+        "k2": "Res",
+        "k3": "Transpose",
+        "k4": "Detune",
+    },
+)
+
+mapping_config.add_smart_guess_mapping(
+    {
+        "k1": [
+            "macro 1",
+            "macro1",
+            "x1 ",
+            "mod x",
+            "filter frequency (modulation x)",
             "filter cutoff",
             "filter frequency",
             "filter freq",
@@ -273,10 +338,12 @@ fallback_priority = [
             "lpf cutoff",
             "cut off",
         ],
-    ),
-    (
-        1,
-        [
+        "k2": [
+            "macro 2",
+            "macro2",
+            "x2 ",
+            "mod y",
+            "filter bandwidth (modulation y)",
             "filter reso",
             "filter resolution",
             "filter bandwidth",
@@ -288,10 +355,10 @@ fallback_priority = [
             "emphasis",
             "q ",
         ],
-    ),
-    (
-        2,
-        [
+        "k3": [
+            "macro 3",
+            "macro3",
+            "x3 ",
             "filter env",
             "vcf env",
             "egf amount",
@@ -301,13 +368,18 @@ fallback_priority = [
             "env amount",
             "filter mod",
         ],
-    ),
-    (3, ["reverb mix", "reverb wet", "reverb amount", "reverb level"]),
-    (4, ["lfo rate", "lfo speed", "lfo freq", "lfo 1 rate"]),
-    (5, ["lfo amount", "lfo depth", "lfo amnt", "lfo 1 depth", "lfo level"]),
-    (
-        6,
-        [
+        "k4": [
+            "macro 4",
+            "macro4",
+            "x4 ",
+            "reverb mix",
+            "reverb wet",
+            "reverb amount",
+            "reverb level",
+        ],
+        "k5": ["lfo rate", "lfo speed", "lfo freq", "lfo 1 rate"],
+        "k6": ["lfo amount", "lfo depth", "lfo amnt", "lfo 1 depth", "lfo level"],
+        "k7": [
             "chorus depth",
             "chorus mix",
             "ensemble",
@@ -316,10 +388,7 @@ fallback_priority = [
             "spread",
             "character",
         ],
-    ),
-    (
-        7,
-        [
+        "k8": [
             "drive",
             "distort",
             "overdrive",
@@ -329,35 +398,50 @@ fallback_priority = [
             "bit crush",
             "noise level",
         ],
-    ),
-]
+    }
+)
 
-# ── State ──────────────────────────────────────────────────────────────────────
+mapping_config.add_action_mapping(
+    {
+        "pad1": "play_pause",
+        "pad2": "stop",
+        "pad3": "record",
+        "pad4": "snap_next",
+        "pad5": "songpat",
+        "pad8": "metronome",
+        "joystick_next": {
+            "action": "preset",
+            "direction": "next",
+            "trigger_value": 64,
+        },
+        "joystick_previous": {
+            "action": "preset",
+            "direction": "previous",
+            "trigger_value": 64,
+        },
+    }
+)
 
-snap_names = {
-    0: "Line",
-    1: "Cell",
-    3: "None",
-    4: "1/6 step",
-    5: "1/4 step",
-    6: "1/3 step",
-    7: "1/2 step",
-    8: "Step",
-    9: "1/6 beat",
-    10: "1/4 beat",
-    11: "1/3 beat",
-    12: "1/2 beat",
-    13: "Beat",
-    14: "Bar",
-}
-
+mapping_config.add_note_mapping(
+    "fruity slicer 2",
+    {
+        "pad1": 60,
+        "pad2": 61,
+        "pad3": 62,
+        "pad4": 63,
+        "pad5": 64,
+        "pad6": 65,
+        "pad7": 66,
+        "pad8": 67,
+    },
+)
 
 class MidiHandler:
     def __init__(self) -> None:
         self.active_plugin_key: PluginInstanceKey | None = None
         self.joystick_armed_by = {
-            PresetDirection.NEXT: True,
-            PresetDirection.PREVIOUS: True,
+            "next": True,
+            "previous": True,
         }
 
     def set_active_plugin_key(self, key: PluginInstanceKey | None) -> None:
@@ -375,45 +459,50 @@ class MidiHandler:
                 return
 
     def handle_note_msg(self, event: FLMidiEvent) -> None:
-        self.handle_fruity_slicer_2_pad_note(event)
+        self.handle_plugin_note_mapping(event)
 
     def handle_cc_msg(self, event: FLMidiEvent) -> None:
         cc = event.data1
         value = event.data2
 
-        match cc:
-            case CC.JOYSTICK_PRESET_NEXT:
-                event.handled = True
-                self.handle_preset_joystick(PresetDirection.NEXT, value)
+        action = self.action_for_cc(cc)
 
-            case CC.JOYSTICK_PRESET_PREV:
-                event.handled = True
-                self.handle_preset_joystick(PresetDirection.PREVIOUS, value)
+        if isinstance(action, dict) and action.get("action") == "preset":
+            direction = action["direction"]
+            trigger_value = action["trigger_value"]
+            event.handled = True
+            self.handle_preset_joystick(direction, value, trigger_value)
+            return
 
-            case cc if cc in pad_cc_actions_by_cc:
-                event.handled = self.handle_transport_pad(
-                    pad_cc_actions_by_cc[cc], value
-                )
-
-            case cc if cc in all_knob_ccs:
-                event.handled = self.handle_knob_cc(cc, value)
+        match action:
+            case action if action is not None:
+                event.handled = self.handle_transport_pad(action, value)
 
             case _:
-                return
+                event.handled = self.handle_knob_cc(cc, value)
 
-    def handle_preset_joystick(self, direction: str, joystick_value: int) -> None:
+    def action_for_cc(self, cc: int) -> str | dict[str, int | str] | None:
+        for control_name, action in mapping_config.action_mappings.items():
+            control = mapping_config.controls[control_name]
+            if control["cc"] == cc:
+                return action
+        return None
+
+    def handle_preset_joystick(
+        self, direction: str, joystick_value: int, trigger_value: int
+    ) -> None:
         selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
         if selected_channel_index is None or selected_channel_index < 0:
             return
 
         match direction:
-            case PresetDirection.NEXT:
+            case "next":
                 preset_action = FL_PLUGINS.nextPreset
 
-            case PresetDirection.PREVIOUS:
+            case "previous":
                 preset_action = FL_PLUGINS.prevPreset
 
-        if joystick_value < CC.PRESET_TRIGGER_VALUE:
+        if joystick_value < trigger_value:
             self.joystick_armed_by[direction] = True
             return
 
@@ -424,14 +513,9 @@ class MidiHandler:
         self.joystick_armed_by[direction] = False
 
     def handle_knob_cc(self, cc: int, value: int) -> bool:
-        if cc not in all_knob_ccs:
-            return False
-
         selected_rack_instance_idx = FL_CHANNELS.selectedChannel(canBeNone=True)
         if selected_rack_instance_idx is None or selected_rack_instance_idx < 0:
             return False
-
-        knob_idx = knob_ccs.index(cc)
 
         if self.active_plugin_key is None:
             return False
@@ -439,7 +523,7 @@ class MidiHandler:
         mapping = mappings_cache.get(self.active_plugin_key)
         if mapping is None:
             return False
-        mapped_parameter = mapping[knob_idx]
+        mapped_parameter = mapping.get(cc)
 
         if mapped_parameter is None:
             # Leave event.handled unset so FL Studio's manual MIDI link
@@ -503,10 +587,9 @@ class MidiHandler:
 
         return True
 
-    def handle_fruity_slicer_2_pad_note(self, event: FLMidiEvent) -> bool:
+    def handle_plugin_note_mapping(self, event: FLMidiEvent) -> bool:
         """
-        Remap MPK Mini pad note bank notes 44-51 to Fruity Slicer 2 slice notes 60-67.
-        This only runs when Fruity Slicer 2 is the selected channel/plugin.
+        Remap configured note inputs when selected plugin has a note mapping.
         """
         selected_channel_index = FL_CHANNELS.selectedChannel(canBeNone=True)
         if selected_channel_index is None or selected_channel_index < 0:
@@ -514,18 +597,27 @@ class MidiHandler:
 
         plugin_name = FL_PLUGINS.getPluginName(selected_channel_index).lower()
 
-        if "fruity slicer 2" not in plugin_name:
-            return False
-
         status = event.status & 0xF0
         note = event.data1
         velocity = event.data2
 
-        if note not in pad_note_bank_notes:
+        note_mapping = None
+        for plugin_key, control_mapping in mapping_config.note_mappings.items():
+            if plugin_key in plugin_name:
+                note_mapping = control_mapping
+                break
+
+        if note_mapping is None:
             return False
 
-        pad_index = pad_note_bank_notes.index(note)
-        mapped_note = fruity_slicer_2_slice_notes[pad_index]
+        mapped_note = None
+        for control_name, output_note in note_mapping.items():
+            if mapping_config.controls[control_name]["note"] == note:
+                mapped_note = output_note
+                break
+
+        if mapped_note is None:
+            return False
 
         try:
             if status == 0x90 and velocity > 0:
@@ -544,7 +636,6 @@ class MidiHandler:
 class MpkHandler:
     def __init__(self) -> None:
         self.midi_handler = MidiHandler()
-        self.last_rack_instance_idx = -99
 
     def handle_init(self) -> None:
         mappings_cache.clear()
@@ -553,7 +644,7 @@ class MpkHandler:
                 rack_instance_idx, userName=True
             )
             key = (rack_instance_idx, plugin_visible_name)
-            mappings_cache.put(key, self.build_knob_mapping(rack_instance_idx))
+            mappings_cache.put(key, self.resolve_plugin_instance_mapping(rack_instance_idx))
         print(
             f"MPK Mini Mk2 Smart Focus - loaded\n"
             f"Mappings cache:\n{mappings_cache.to_print()}"
@@ -568,131 +659,111 @@ class MpkHandler:
         plugin_visible_name = FL_PLUGINS.getPluginName(
             selected_rack_instance_idx, userName=True
         )
-        self.last_rack_instance_idx = selected_rack_instance_idx
         active_plugin_key = (selected_rack_instance_idx, plugin_visible_name)
         if mappings_cache.get(active_plugin_key) is None:
             mappings_cache.put(
                 active_plugin_key,
-                self.build_knob_mapping(selected_rack_instance_idx),
+                self.resolve_plugin_instance_mapping(selected_rack_instance_idx),
             )
         self.midi_handler.set_active_plugin_key(active_plugin_key)
 
     def handle_midi_msg(self, event: FLMidiEvent) -> None:
         self.midi_handler.handle_midi_msg(event)
 
-    def scan_plugin_parameters(self, channel_index: int) -> ParametersByIndex:
+    def scan_fl_runtime_parameters(self, channel_index: int) -> PluginRuntimeParameters:
         """
-        Scan plugin parameter names once by FL parameter index.
+        Scan plugin parameter names once by normalized name and FL parameter index.
         """
 
         param_count = FL_PLUGINS.getParamCount(channel_index)
         # VST wrappers may report 4240 slots; first 4096 are plugin params.
-        empty_streak_limit = 64
         scan_limit = min(param_count, 4096)
 
-        parameters_by_index = {}
-        empty_streak = 0
+        plugin_runtime_parameters = {}
         for parameter_index in range(scan_limit):
             name = FL_PLUGINS.getParamName(parameter_index, channel_index)
             if name.strip():
-                parameters_by_index[parameter_index] = name.lower()
-                empty_streak = 0
-            else:
-                empty_streak += 1
-                if empty_streak >= empty_streak_limit:
-                    break
-        return parameters_by_index
+                normalized_name = name.strip().lower()
+                mapped_parameter = MappedParameter(parameter_index, normalized_name)
+                plugin_runtime_parameters[normalized_name] = mapped_parameter
+                plugin_runtime_parameters[parameter_index] = mapped_parameter
+        return plugin_runtime_parameters
 
-    def resolve_plugin_map(
+    def resolve_plugin_control_mapping(
         self,
-        parameters_by_index: ParametersByIndex,
-        plugin_key: str,
-    ) -> KnobMapping:
-        """
-        Build knob list using exact name matching from plugin_maps.
-        Returns [...8...].
-        """
-        used = set()
-        blocked_fallback_slots = set()
-        result = [None] * 8
+        control_mapping: PluginControlMapping,
+        plugin_runtime_parameters: PluginRuntimeParameters,
+    ) -> MidiControlMapping:
+        midi_control_mapping = {}
 
-        for knob_index, target in enumerate(plugin_maps[plugin_key]):
-            if target is None:
+        for control_name, target in control_mapping.items():
+            control = mapping_config.controls[control_name]
+            cc = control["cc"]
+            if cc is None:
                 continue
 
-            mapped_parameter = None
-            if isinstance(target, int):
-                name = parameters_by_index.get(target)
-                if name is not None:
-                    mapped_parameter = MappedParameter(target, name)
-            else:
-                target = target.lower()
-                for parameter_index, name in parameters_by_index.items():
-                    if name == target:
-                        mapped_parameter = MappedParameter(parameter_index, name)
-                        break
-
-            if mapped_parameter is None:
-                blocked_fallback_slots.add(knob_index)
+            runtime_parameter = plugin_runtime_parameters.get(target)
+            if runtime_parameter is None:
                 continue
 
-            result[knob_index] = mapped_parameter
-            used.add(mapped_parameter.index)
+            midi_control_mapping[cc] = runtime_parameter
 
-        self.fill_fallback(result, parameters_by_index, used, blocked_fallback_slots)
-        return result
+        return midi_control_mapping
 
-    def resolve_fallback_map(
-        self, parameters_by_index: ParametersByIndex
-    ) -> KnobMapping:
-        """
-        Build 8-knob list using keyword priority for unknown plugins.
-        """
-        used = set()
-        result = [None] * 8
-        self.fill_fallback(result, parameters_by_index, used)
-        return result
-
-    def fill_fallback(
+    def resolve_smart_guess_mapping(
         self,
-        result: KnobMapping,
-        parameters_by_index: ParametersByIndex,
-        used: set[ParamIndex],
-        blocked_slots: set[int] | None = None,
-    ) -> None:
-        """Apply fallback_priority to any still-None slots."""
-        if blocked_slots is None:
-            blocked_slots = set()
+        plugin_runtime_parameters: PluginRuntimeParameters,
+    ) -> MidiControlMapping:
+        smart_guess_denylist = [
+            "volume",
+            "master vol",
+            "output vol",
+            "pan",
+            "panorama",
+            "panning",
+            "master pan",
+            "limiter",
+        ]
+        used = set()
+        midi_control_mapping = {}
 
-        for knob_index, keywords in fallback_priority:
-            if knob_index in blocked_slots:
+        for control_name, keywords in mapping_config.smart_guess_mappings.items():
+            control = mapping_config.controls[control_name]
+            cc = control["cc"]
+            if cc is None:
                 continue
-            if result[knob_index] is not None:
-                continue
-            for parameter_index, name in parameters_by_index.items():
-                if parameter_index in used:
+
+            for target, runtime_parameter in plugin_runtime_parameters.items():
+                if not isinstance(target, str):
                     continue
-                if any(keyword in name for keyword in never_map):
+                if runtime_parameter.index in used:
                     continue
-                if any(keyword in name for keyword in keywords):
-                    result[knob_index] = MappedParameter(parameter_index, name)
-                    used.add(parameter_index)
+                if any(keyword in target for keyword in smart_guess_denylist):
+                    continue
+                if any(keyword in target for keyword in keywords):
+                    midi_control_mapping[cc] = runtime_parameter
+                    used.add(runtime_parameter.index)
                     break
 
-    def build_knob_mapping(self, channel_index: int) -> KnobMapping:
+        return midi_control_mapping
+
+    def resolve_plugin_instance_mapping(self, channel_index: int) -> MidiControlMapping:
         plugin_name = FL_PLUGINS.getPluginName(channel_index).lower()
-        parameters_by_index = self.scan_plugin_parameters(channel_index)
+        plugin_runtime_parameters = self.scan_fl_runtime_parameters(channel_index)
 
         matched_key = None
-        for key in plugin_maps:
+        for key in mapping_config.plugin_mappings:
             if key in plugin_name:
                 matched_key = key
                 break
 
         if matched_key:
-            return self.resolve_plugin_map(parameters_by_index, matched_key)
-        else:
-            return self.resolve_fallback_map(parameters_by_index)
+            return self.resolve_plugin_control_mapping(
+                mapping_config.plugin_mappings[matched_key],
+                plugin_runtime_parameters,
+            )
+
+        return self.resolve_smart_guess_mapping(plugin_runtime_parameters)
 
 
 # ── FL Studio callbacks ────────────────────────────────────────────────────────
