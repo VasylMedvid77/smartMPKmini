@@ -1,6 +1,6 @@
 # FL Studio MIDI Script Knowledgebase
 
-Purpose: give LLMs domain context before changing `device_MPKmini2_SmartFocus.py`.
+Purpose: give LLMs domain context before changing `smart_MPK_mini_driver.py`.
 
 ## Runtime Reality
 
@@ -37,12 +37,12 @@ Purpose: give LLMs domain context before changing `device_MPKmini2_SmartFocus.py
 
 ## Current Script Contract
 
-- Main source: `device_MPKmini2_SmartFocus.py`.
+- Main source: `smart_MPK_mini_driver.py`.
 - Public behavior lives in FL callbacks, especially `OnMidiMsg`, `OnRefresh`, and `OnIdle`.
 - Knobs K1-K8 send CC `1-8` and map to selected plugin params.
 - Pad CC bank messages CC `20`, `21`, `22`, `23`, `24`, `27` control transport/snap/song-pattern/metronome.
 - Joystick CC `50` and `100` triggers preset next/previous with debounce.
-- Fruity Slicer 2 remaps MPK pad notes `44-51` to slice notes `60-67`.
+- Fruity Slicer 2 remaps MPK pad notes `36-48` to slice notes `60-67`.
 - Selected Channel Rack instrument determines smart knob mapping.
 - Known plugin maps use exact parameter names or stable indexes; unknown plugins use keyword fallback.
 - `NEVER_MAP` intentionally avoids mapping broad volume/pan/limiter params in fallback.

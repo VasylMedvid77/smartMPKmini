@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_known_plugin_knob_maps_to_exact_parameter(fl_env):
     fl_env.plugins.names[0] = "FLEX"
     fl_env.plugins.params[0] = {
@@ -66,7 +69,7 @@ def test_unmapped_knob_leaves_event_unhandled(fl_env):
     assert fl_env.plugins.set_param_calls == []
 
 
-def test_knob_mapping_error_is_printed_and_event_handled(fl_env):
+def test_knob_mapping_error_is_not_swallowed(fl_env):
     fl_env.plugins.names[0] = "Mystery Synth"
     fl_env.plugins.params[0] = {0: "Filter cutoff"}
     fl_env.plugins.fail_set_param = RuntimeError("set failed")
@@ -76,11 +79,22 @@ def test_knob_mapping_error_is_printed_and_event_handled(fl_env):
 
     event = fl_env.cc(1, 64)
 
-    fl_env.run_with_print_capture(script.OnMidiMsg, event)
+    with pytest.raises(RuntimeError, match="set failed"):
+        script.OnMidiMsg(event)
+
+
+def test_knob_mapping_works_without_prior_refresh(fl_env):
+    fl_env.plugins.names[0] = "FLEX"
+    fl_env.plugins.params[0] = {10: "Macro 1"}
+    script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+
+    event = fl_env.cc(1, 64)
+
+    script.OnMidiMsg(event)
 
     assert event.handled is True
-    assert fl_env.prints[-1][0] == "Knob mapping error:"
-    assert str(fl_env.prints[-1][1]) == "set failed"
+    assert fl_env.plugins.set_param_calls == [(64 / 127.0, 10, 0)]
 
 
 def test_transport_pad_ccs_call_fl_transport(fl_env):
@@ -110,6 +124,45 @@ def test_transport_pad_ccs_call_fl_transport(fl_env):
         ("setLoopMode", ()),
         ("globalTransport", (110, 1)),
     ]
+
+
+def test_metronome_release_does_not_toggle(fl_env):
+    script = fl_env.load_script()
+
+    metronome_off = fl_env.cc(27, 0)
+
+    script.OnMidiMsg(metronome_off)
+
+    assert metronome_off.handled is True
+    assert fl_env.transport.calls == []
+
+
+def test_on_init_skips_channels_without_valid_plugin(fl_env):
+    fl_env.channels.names = {0: "Audio Clip", 1: "Synth"}
+    fl_env.plugins.names = {1: "FLEX"}
+    fl_env.plugins.params = {1: {10: "Macro 1"}}
+    fl_env.plugins.valid_channels = {1}
+    script = fl_env.load_script()
+
+    fl_env.run_with_print_capture(script.OnInit)
+
+    assert 0 not in script.mappings_cache._items
+    assert 1 in script.mappings_cache._items
+
+
+def test_knob_on_invalid_plugin_does_not_crash(fl_env):
+    fl_env.channels.names = {0: "Audio Clip"}
+    fl_env.plugins.names = {}
+    fl_env.plugins.valid_channels = set()
+    fl_env.plugins.params = {}
+    script = fl_env.load_script()
+    fl_env.run_with_print_capture(script.OnInit)
+
+    event = fl_env.cc(1, 64)
+    script.OnMidiMsg(event)
+
+    assert event.handled is False
+    assert fl_env.plugins.set_param_calls == []
 
 
 def test_joystick_preset_controls_are_debounced(fl_env):
@@ -142,8 +195,8 @@ def test_fruity_slicer_2_pads_remap_notes_to_slices(fl_env):
     fl_env.plugins.names[0] = "Fruity Slicer 2"
     script = fl_env.load_script()
 
-    note_on = fl_env.note_on(44, 96)
-    note_off = fl_env.note_off(44)
+    note_on = fl_env.note_on(36, 96)
+    note_off = fl_env.note_off(36)
 
     script.OnMidiMsg(note_on)
     script.OnMidiMsg(note_off)
@@ -157,7 +210,7 @@ def test_non_slicer_notes_are_left_unhandled(fl_env):
     fl_env.plugins.names[0] = "FLEX"
     script = fl_env.load_script()
 
-    event = fl_env.note_on(44, 100)
+    event = fl_env.note_on(36, 100)
 
     script.OnMidiMsg(event)
 
@@ -177,7 +230,7 @@ def test_on_init_builds_mapping_cache_and_prints_keys(fl_env):
     fl_env.run_with_print_capture(script.OnInit)
 
     assert fl_env.prints == [
-        ("MPK Mini Mk2 Smart Focus - loaded\nMappings cache:\n(0, 'Mystery Synth')",)
+        ("Smart MPK Mini Driver - loaded\nMappings cache:\n0",),
     ]
 
 
@@ -202,5 +255,5 @@ def test_on_init_prints_startup_banner(fl_env):
     printed_text = "\n".join(
         " ".join(str(part) for part in line) for line in fl_env.prints
     )
-    assert "MPK Mini Mk2 Smart Focus - loaded" in printed_text
+    assert "Smart MPK Mini Driver - loaded" in printed_text
     assert "Mappings cache:" in printed_text

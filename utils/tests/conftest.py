@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parents[2] / "device_MPKmini2_SmartFocus.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "smart_MPK_mini_driver.py"
 
 
 class MidiEvent:
@@ -50,6 +50,12 @@ class FakePlugins:
     prev_preset_calls: list[int] = field(default_factory=list)
     fail_set_param: Exception | None = None
     get_param_name_calls: list[tuple[int, int]] = field(default_factory=list)
+    valid_channels: set[int] | None = None
+
+    def isValid(self, chan, slotIndex=-1, useGlobalIndex=False):
+        if self.valid_channels is not None:
+            return chan in self.valid_channels
+        return chan in self.names
 
     def getPluginName(self, chan, slotIndex=-1, userName=False, useGlobalIndex=False):
         if userName:
@@ -121,6 +127,10 @@ class FakeGeneral:
         return int(self.metronome_on)
 
 
+class FakeMidi:
+    HW_ChannelEvent = 65536
+
+
 @dataclass
 class FlStudioEnvironment:
     channels: FakeChannels = field(default_factory=FakeChannels)
@@ -138,6 +148,7 @@ class FlStudioEnvironment:
             "transport": _module_from_object("transport", self.transport),
             "ui": _module_from_object("ui", self.ui),
             "general": _module_from_object("general", self.general),
+            "midi": _module_from_object("midi", FakeMidi()),
         }
         spec = importlib.util.spec_from_file_location("device_under_test", SCRIPT_PATH)
         module = importlib.util.module_from_spec(spec)

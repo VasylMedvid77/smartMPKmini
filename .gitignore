@@ -14,3 +14,8 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+.opencode/
+.ruff_cache/
+knowledgebase.md
+AGENTS.md
