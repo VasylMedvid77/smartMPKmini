@@ -1,5 +1,4 @@
 # name=Smart MPK Mini Driver
-# url=https://forum.image-line.com
 
 """
 Smart MPK Mini Driver
