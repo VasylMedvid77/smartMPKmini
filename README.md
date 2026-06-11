@@ -35,7 +35,7 @@ Development checks:
 
 ```sh
 uv sync --dev
-uv run pytest utils/tests
+uv run pytest tests
 uv run ruff format .
 uv run ruff check .
 ```

@@ -53,7 +53,7 @@ Purpose: give LLMs domain context before changing `smart_MPK_mini_driver.py`.
 - Do not test private helper functions. Helpers may be deleted, merged, renamed, or replaced during refactor.
 - Stub FL modules in tests. Never import real FL Studio modules in repo tests.
 - Observable effects to assert: `event.handled`, calls to fake FL APIs, hint messages, printed script output, MIDI notes sent.
-- Current stable behavior is captured in `utils/tests/test_script_integration.py`.
+- Current stable behavior is captured in `tests/test_script_integration.py`.
 
 ## Lint And Formatting Caveats
 

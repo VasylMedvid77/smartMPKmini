@@ -6,7 +6,7 @@
 - Main source file is `smart_MPK_mini_driver.py` at repo root.
 - Original seed source came from `C:\Users\User\Documents\Image-Line\FL Studio\Settings\Hardware\MPK_Mini_SmartFocus` (`/mnt/c/Users/User/Documents/Image-Line/FL Studio/Settings/Hardware/MPK_Mini_SmartFocus` in WSL).
 - Project tooling uses `uv` with `pyproject.toml`.
-- Integration tests live under `utils/tests/` and stub FL Studio-provided modules.
+- Integration tests live under `tests/` and stub FL Studio-provided modules.
 
 ## Script Context
 
@@ -43,7 +43,7 @@
 - Do not invoke or follow the `test-driven-development` skill in this repo unless the user explicitly asks for TDD. Discuss and settle implementation first; write or update tests after the implementation direction is approved.
 - Tests in this repo should cover observable FL Studio script behavior through entrypoints (`OnInit`, `OnMidiMsg`, `OnRefresh`, `OnIdle`), not private helper functions.
 - Do not add unit tests that call internal helpers such as `_score_params`, `_get_mapping`, or `_handle_transport_pad`; those functions may be deleted, merged, or rewritten during refactors.
-- Use integration tests in `utils/tests/` with stubbed `channels`, `general`, `plugins`, `transport`, and `ui` modules.
+- Use integration tests in `tests/` with stubbed `channels`, `general`, `plugins`, `transport`, and `ui` modules.
 - For behavior changes, write or update a focused integration test when the behavior is not already covered.
 - Make the smallest script change that satisfies the requested behavior.
 - Do not extract a helper/function for logic used only once in one place unless the user explicitly asks or there is a concrete runtime/testing constraint.
