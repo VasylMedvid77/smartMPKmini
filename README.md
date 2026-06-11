@@ -1,43 +1,108 @@
 # Smart MPK Mini Driver
 
-FL Studio hardware device script for Akai MPK Mini Mk2.
+Hardware synths are awesome because you turn them on and they're ready. Every knob does what you expect. No setup between you and the sound.
 
-## What It Does
+VSTs sound just as good but you either use the mouse or spend time MIDI-learning every parameter by hand. Switch plugins and you start over.
 
-- Maps knobs K1-K8 (`CC 1-8`) to parameters on the selected plugin.
-- Includes exact mappings for Kepler, FLEX, Sawer, Mini Synth Pro, 3x Osc, Granulizer, FPC, and Fruity Slicer 2.
-- Falls back to keyword-based parameter mapping for unknown plugins.
-- Maps pad CC bank (`CC 20-27`) to play/pause, stop, record, snap next, Pattern/Song, and metronome.
-- Remaps Fruity Slicer 2 pad notes (`36,38,40,41,43,45,47,48`) to slice notes (`60-67`).
-- Uses joystick `CC 50/100` for preset next/previous with debounce.
+This script fixes that. Load a VST in FL Studio and all knobs map to useful parameters. Switch plugins — controls follow. Switch back — still mapped, still ready.
 
 ## Install
 
-Copy `device_smart_MPK_mini_driver.py` into your FL Studio hardware scripts folder:
+Put `device_smart_MPK_mini_driver.py` in:
 
-```text
+```
 Documents\Image-Line\FL Studio\Settings\Hardware\smart_MPK_mini_driver\
 ```
 
-Then restart FL Studio or reload MIDI scripts, and select `Smart MPK Mini Driver` for the controller.
+FL Studio → Options → MIDI Settings → pick `Smart MPK Mini Driver` as Controller type.
 
-## Development
+Done. Load a VST, twist a knob.
 
-This script uses FL Studio-provided Python modules (`channels`, `general`, `plugins`, `transport`, `ui`). It is not meant to run as a normal standalone Python program.
+## Pre-configured plugins
 
-Syntax-only check:
+Hand-tuned mappings for knobs that actually make sense on hardware:
 
-```sh
-python -m py_compile smart_MPK_mini_driver.py
+**Kepler** · **FLEX** · **Sawer** · **Mini Synth Pro** · **3x Osc** · **Granulizer** · **FPC** · **Fruity Slicer 2**
+
+Cutoff, resonance, envelope, LFO, reverb, drive — not volume or pan.
+
+## Use with any controller
+
+The mapping system is generic. Define your knobs and CCs, then add plugin mappings:
+
+```python
+mapping_config.add_plugin_mapping("cytrus", {
+    "k1": "Cutoff",
+    "k2": "Resonance",
+    "k3": "EG Amount",
+    "k4": "LFO Rate",
+    "k5": "FM Amount",
+    "k6": "Osc Mix",
+    "k7": "Reverb",
+    "k8": "Chorus",
+})
 ```
 
-Development checks:
+See `DEFAULT_CONTROLS` in the source for the layout format.
+
+## Smart guess fallback
+
+No preset for your VST? The script scans parameter names and matches keywords (`cutoff`, `resonance`, `lfo`, `reverb`, `drive`) to the eight knobs. Volume, pan, and limiter are excluded — those belong on the mixer.
+
+Won't be perfect. Will be playable. Still better than MIDI-learn.
+
+## Default layout (MPK Mini Mk2)
+
+| Control | CC | Action |
+|---------|----|--------|
+| K1-K8 | 1-8 | Plugin parameters |
+| Pad 1 | 20 | Play / Pause |
+| Pad 2 | 21 | Stop |
+| Pad 3 | 22 | Record |
+| Pad 4 | 23 | Snap toggle |
+| Pad 5 | 24 | Pattern / Song |
+| Pad 8 | 27 | Metronome |
+| Joystick | 50 / 100 | Next / Previous preset |
+
+Fruity Slicer 2 pads remap MPK notes 36-48 to slice notes 60-67.
+
+## How it works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         mapping_config                          │
+│  Known plugin maps (Kepler, FLEX, Sawer, ...)                   │
+│  + Smart guess keywords (cutoff, resonance, lfo rate, ...)      │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    OnInit / OnRefresh                            │
+│  For each channel with a valid plugin:                          │
+│    1. Scan plugin parameter names (getParamCount / getParamName) │
+│    2. Match against mapping_config                               │
+│    3. Build CC → parameter index lookup table                    │
+│    4. Cache it for zero-latency recall                          │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         OnMidiMsg                                │
+│  MIDI CC arrives (e.g. CC 1, value 64)                          │
+│    1. Look up CC in current channel's cached mapping             │
+│    2. If found → setParamValue(index, value / 127)              │
+│    3. If not found → leave event unhandled                      │
+│  Notes → Fruity Slicer 2 pad remap or let through               │
+│  Joystick → preset next/previous with debounce                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Development
 
 ```sh
 uv sync --dev
 uv run pytest tests
 uv run ruff format .
 uv run ruff check .
+python -m py_compile smart_MPK_mini_driver.py
 ```
-
-Functional testing requires FL Studio with the script installed.
